@@ -30,3 +30,5 @@ app.MapFlashSaleCampaignEndpoints();
 app.MapFlashSaleItemEndpoints();
 
 app.Run();
+
+public partial class Program;
