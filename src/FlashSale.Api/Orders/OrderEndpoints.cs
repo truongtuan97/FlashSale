@@ -24,12 +24,12 @@ public static class OrderEndpoints
             return order is null ? Results.NotFound() : Results.Ok(OrderResponse.FromOrder(order));
         }).WithName("GetOrderById");
 
-        orders.MapPost("/", async (CreateOrderRequest request, FlashSaleDbContext dbContext) =>
+        orders.MapPost("/", async (CreateOrderRequest request, FlashSaleDbContext dbContext, IFlashSaleStockUpdater stockUpdater) =>
         {
             var validationError = OrderRequestValidator.Validate(request);
             if (validationError != null)
             {
-                return Results.BadRequest(new {message = validationError});
+                return Results.BadRequest(new { message = validationError });
             }
 
             var requestItemsIds = request.Items.Select(item => item.FlashSaleItemId).Distinct().ToArray();
@@ -76,6 +76,20 @@ public static class OrderEndpoints
 
             await using var transaction = await dbContext.Database.BeginTransactionAsync();
 
+            foreach (var itemRequest in requestedQuantityByItemId)
+            {
+                var stockUpdated = await stockUpdater.TryIncreaseSoldQuantityAsync(
+                    itemRequest.Key,
+                    itemRequest.Value,
+                    now);
+
+                if (!stockUpdated)
+                {
+                    await transaction.RollbackAsync();
+                    return Results.BadRequest(new { message = "Not enough stock." });
+                }
+            }
+
             var order = new Domain.Entities.Order
             {
                 Id = Guid.NewGuid(),
@@ -99,12 +113,10 @@ public static class OrderEndpoints
                     Quantity = requestItem.Quantity,
                     UnitPrice = flashSaleItem.SalePrice,
                     LineTotal = flashSaleItem.SalePrice * requestItem.Quantity,
-                    CreatedAt = now,                    
+                    CreatedAt = now,
                 };
 
                 order.Items.Add(orderItem);
-                flashSaleItem.SoldQuantity += requestItem.Quantity;
-                flashSaleItem.UpdatedAt = now;
             }
 
             order.TotalAmount = order.Items.Sum(item => item.LineTotal);
@@ -121,7 +133,7 @@ public static class OrderEndpoints
     }
 }
 
-public sealed record CreateOrderRequest(    
+public sealed record CreateOrderRequest(
     string CustomerName,
     string CustomerEmail,
     IReadOnlyList<CreateOrderItemRequest> Items

@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using FlashSale.Api.Orders;
 
 namespace FlashSale.IntegrationTests.Api;
 
@@ -22,14 +23,15 @@ internal sealed class FlashSaleApiFactory : WebApplicationFactory<Program>
             services.RemoveAll<DbContextOptions>();
             services.RemoveAll<DbContextOptions<FlashSaleDbContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<FlashSaleDbContext>>();
-
-            // services.AddDbContext<FlashSaleDbContext>(options =>
-            //     options.UseInMemoryDatabase(_databaseName));
+            
             services.AddDbContext<FlashSaleDbContext>(options => 
                 options
                     .UseInMemoryDatabase(_databaseName)
                     .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             );
+
+            services.RemoveAll<IFlashSaleStockUpdater>();
+            services.AddScoped<IFlashSaleStockUpdater, InMemoryFlashSaleStockUpdater>();
         });
     }
 }
