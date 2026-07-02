@@ -14,4 +14,5 @@ public sealed class FlashSaleItem
     public bool IsActive { get; set; } = true;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public List<OrderItem> OrderItems { get; set; } = [];
 }

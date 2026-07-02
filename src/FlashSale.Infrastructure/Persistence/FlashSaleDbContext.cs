@@ -12,6 +12,8 @@ public sealed class FlashSaleDbContext : DbContext
     public DbSet<Product> Products { get; set; } = null!;
     public DbSet<FlashSaleCampaign> FlashSaleCampaigns { get; set; } = null!;
     public DbSet<FlashSaleItem> FlashSaleItems { get; set; } = null!;
+    public DbSet<Order> Orders { get; set; } = null!;
+    public DbSet<OrderItem> OrderItems { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

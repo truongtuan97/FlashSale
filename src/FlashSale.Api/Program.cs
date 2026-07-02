@@ -1,5 +1,6 @@
 using FlashSale.Api.FlashSaleCampaigns;
 using FlashSale.Api.FlashSaleItems;
+using FlashSale.Api.Orders;
 using FlashSale.Api.Products;
 using FlashSale.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -28,6 +29,7 @@ app.UseHttpsRedirection();
 app.MapProductEndpoints();
 app.MapFlashSaleCampaignEndpoints();
 app.MapFlashSaleItemEndpoints();
+app.MapOrderEndpoints();
 
 app.Run();
 
