@@ -18,7 +18,7 @@ public sealed class OrderApiTests
             soldQuantity: 2,
             salePrice: 80m);
 
-        var orderResponse = await client.PostAsJsonAsync("/api/orders", new
+        var orderResponse = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -91,7 +91,7 @@ public sealed class OrderApiTests
             soldQuantity: 4,
             salePrice: 80m);
 
-        var orderResponse = await client.PostAsJsonAsync("/api/orders", new
+        var orderResponse = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -130,7 +130,7 @@ public sealed class OrderApiTests
             soldQuantity: 0,
             salePrice: 80m);
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "",
             customerEmail = "customer@example.com",
@@ -162,7 +162,7 @@ public sealed class OrderApiTests
             soldQuantity: 0,
             salePrice: 80m);
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "",
@@ -188,7 +188,7 @@ public sealed class OrderApiTests
         await using var factory = new FlashSaleApiFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -207,7 +207,7 @@ public sealed class OrderApiTests
         await using var factory = new FlashSaleApiFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -239,7 +239,7 @@ public sealed class OrderApiTests
             soldQuantity: 0,
             salePrice: 80m);
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -265,7 +265,7 @@ public sealed class OrderApiTests
         await using var factory = new FlashSaleApiFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -298,7 +298,7 @@ public sealed class OrderApiTests
             salePrice: 80m,
             isActive: false);
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -331,7 +331,7 @@ public sealed class OrderApiTests
             salePrice: 80m,
             campaignIsActive: false);
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -363,7 +363,7 @@ public sealed class OrderApiTests
             soldQuantity: 0,
             salePrice: 80m);
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -402,7 +402,7 @@ public sealed class OrderApiTests
             campaignStartsAt: DateTimeOffset.UtcNow.AddDays(-2),
             campaignEndsAt: DateTimeOffset.UtcNow.AddDays(-1));
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Integration Customer",
             customerEmail = "customer@example.com",
@@ -420,6 +420,162 @@ public sealed class OrderApiTests
 
         var error = await ReadJsonAsync(response);
         Assert.Equal("Campaign is not currently running.", error.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task Create_order_requires_idempotency_key()
+    {
+        await using var factory = new FlashSaleApiFactory();
+        using var client = factory.CreateClient();
+
+        var flashSaleItemId = await CreateFlashSaleItemAsync(
+            client,
+            totalQuantity: 10,
+            soldQuantity: 0,
+            salePrice: 80m);
+
+        var response = await client.PostAsJsonAsync("/api/orders", new
+        {
+            customerName = "Integration Customer",
+            customerEmail = "customer@example.com",
+            items = new[]
+            {
+            new
+            {
+                flashSaleItemId,
+                quantity = 1
+            }
+        }
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var error = await ReadJsonAsync(response);
+        Assert.Equal(
+            "Idempotency-Key header is required.",
+            error.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task Create_order_with_same_idempotency_key_returns_existing_order_without_increasing_stock_again()
+    {
+        await using var factory = new FlashSaleApiFactory();
+        using var client = factory.CreateClient();
+
+        var flashSaleItemId = await CreateFlashSaleItemAsync(
+            client,
+            totalQuantity: 10,
+            soldQuantity: 0,
+            salePrice: 80m);
+
+        var idempotencyKey = Guid.NewGuid().ToString("N");
+
+        var request = new
+        {
+            customerName = "Integration Customer",
+            customerEmail = "customer@example.com",
+            items = new[]
+            {
+            new
+            {
+                flashSaleItemId,
+                quantity = 3
+            }
+        }
+        };
+
+        var firstResponse = await PostOrderAsync(client, request, idempotencyKey);
+
+        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
+
+        var firstOrder = await ReadJsonAsync(firstResponse);
+        var firstOrderId = firstOrder.RootElement.GetProperty("id").GetGuid();
+
+        var secondResponse = await PostOrderAsync(client, request, idempotencyKey);
+
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+
+        var secondOrder = await ReadJsonAsync(secondResponse);
+        Assert.Equal(firstOrderId, secondOrder.RootElement.GetProperty("id").GetGuid());
+
+        var itemResponse = await client.GetAsync($"/api/flash-sale-items/{flashSaleItemId}");
+        Assert.Equal(HttpStatusCode.OK, itemResponse.StatusCode);
+
+        var item = await ReadJsonAsync(itemResponse);
+        Assert.Equal(3, item.RootElement.GetProperty("soldQuantity").GetInt32());
+        Assert.Equal(7, item.RootElement.GetProperty("availableQuantity").GetInt32());
+    }
+
+    [Fact]
+    public async Task Create_order_returns_conflict_when_idempotency_key_is_reused_with_different_request()
+    {
+        await using var factory = new FlashSaleApiFactory();
+        using var client = factory.CreateClient();
+
+        var flashSaleItemId = await CreateFlashSaleItemAsync(
+            client,
+            totalQuantity: 10,
+            soldQuantity: 0,
+            salePrice: 80m);
+
+        var idempotencyKey = Guid.NewGuid().ToString("N");
+
+        var firstResponse = await PostOrderAsync(client, new
+        {
+            customerName = "Integration Customer",
+            customerEmail = "customer@example.com",
+            items = new[]
+            {
+            new
+            {
+                flashSaleItemId,
+                quantity = 1
+            }
+        }
+        }, idempotencyKey);
+
+        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
+
+        var secondResponse = await PostOrderAsync(client, new
+        {
+            customerName = "Integration Customer",
+            customerEmail = "customer@example.com",
+            items = new[]
+            {
+            new
+            {
+                flashSaleItemId,
+                quantity = 2
+            }
+        }
+        }, idempotencyKey);
+
+        Assert.Equal(HttpStatusCode.Conflict, secondResponse.StatusCode);
+
+        var error = await ReadJsonAsync(secondResponse);
+        Assert.Equal(
+            "Idempotency-Key was already used with a different request.",
+            error.RootElement.GetProperty("message").GetString());
+
+        var itemResponse = await client.GetAsync($"/api/flash-sale-items/{flashSaleItemId}");
+        Assert.Equal(HttpStatusCode.OK, itemResponse.StatusCode);
+
+        var item = await ReadJsonAsync(itemResponse);
+        Assert.Equal(1, item.RootElement.GetProperty("soldQuantity").GetInt32());
+        Assert.Equal(9, item.RootElement.GetProperty("availableQuantity").GetInt32());
+    }
+
+    private static async Task<HttpResponseMessage> PostOrderAsync(HttpClient client, object request, string? idempotencyKey = null)
+    {
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/orders");
+        httpRequest.Headers.Add(
+            "Idempotency-Key",
+            idempotencyKey ?? Guid.NewGuid().ToString("N")
+        );
+
+        httpRequest.Content = JsonContent.Create(request);
+
+        return await client.SendAsync(httpRequest);
     }
 
     private static async Task<Guid> CreateFlashSaleItemAsync(

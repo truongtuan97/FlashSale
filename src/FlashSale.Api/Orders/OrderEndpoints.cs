@@ -1,3 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using FlashSale.Domain.Entities;
 using FlashSale.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,25 +15,53 @@ public static class OrderEndpoints
 
         orders.MapGet("/{id:guid}", async (Guid id, FlashSaleDbContext dbContext) =>
         {
-            var order = await dbContext.Orders
-                .AsNoTracking()
-                .Include(order => order.Items)
-                .ThenInclude(item => item.FlashSaleItem)
-                .ThenInclude(item => item.Product)
-                .Include(order => order.Items)
-                .ThenInclude(item => item.FlashSaleItem)
-                .ThenInclude(item => item.Campaign)
+            var order = await IncludeOrderResponseDetails(dbContext.Orders.AsNoTracking())
                 .FirstOrDefaultAsync(order => order.Id == id);
 
             return order is null ? Results.NotFound() : Results.Ok(OrderResponse.FromOrder(order));
         }).WithName("GetOrderById");
 
-        orders.MapPost("/", async (CreateOrderRequest request, FlashSaleDbContext dbContext, IFlashSaleStockUpdater stockUpdater) =>
+        orders.MapPost("/", async (
+            CreateOrderRequest request, 
+            HttpRequest httpRequest,
+            FlashSaleDbContext dbContext, 
+            IFlashSaleStockUpdater stockUpdater) =>
         {
+            if (!httpRequest.Headers.TryGetValue("Idempotency-Key", out var idempotencyKeyValues) || string.IsNullOrWhiteSpace(idempotencyKeyValues.FirstOrDefault()))
+            {
+                return Results.BadRequest(new { message = "Idempotency-Key header is required."} );
+            }
+
+            var idempotencyKey = idempotencyKeyValues.First()!.Trim();
+
+            if (idempotencyKey.Length > 200)
+            {
+                return Results.BadRequest(new { message = "Idempotency-Key must be 200 characters or fewer." });
+            }
+
+            var requestHash = OrderRequestHasher.Hash(request);
+
             var validationError = OrderRequestValidator.Validate(request);
             if (validationError != null)
             {
                 return Results.BadRequest(new { message = validationError });
+            }
+
+            var existingIdempotencyKey = await dbContext.OrderIdempotencyKeys
+                .AsNoTracking()
+                .FirstOrDefaultAsync(key => key.Key == idempotencyKey);
+
+            if (existingIdempotencyKey is not null)
+            {
+                if (existingIdempotencyKey.RequestHash != requestHash)
+                {
+                    return Results.Conflict(new { message = "Idempotency-Key was already used with a different request." });
+                }
+
+                var existingOrder = await IncludeOrderResponseDetails(dbContext.Orders.AsNoTracking())
+                    .FirstAsync(order => order.Id == existingIdempotencyKey.OrderId);
+
+                return Results.Ok(OrderResponse.FromOrder(existingOrder));
             }
 
             var requestItemsIds = request.Items.Select(item => item.FlashSaleItemId).Distinct().ToArray();
@@ -122,6 +154,18 @@ public static class OrderEndpoints
             order.TotalAmount = order.Items.Sum(item => item.LineTotal);
 
             dbContext.Orders.Add(order);
+
+            dbContext.OrderIdempotencyKeys.Add(new OrderIdempotencyKey
+            {
+                Id = Guid.NewGuid(),
+                Key = idempotencyKey, 
+                RequestHash = requestHash,
+                OrderId = order.Id,
+                Order = order,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+
             await dbContext.SaveChangesAsync();
             await transaction.CommitAsync();
 
@@ -130,6 +174,18 @@ public static class OrderEndpoints
         }).WithName("CreateOrder");
 
         return orders;
+    }
+
+    private static IQueryable<Domain.Entities.Order> IncludeOrderResponseDetails(
+        IQueryable<Domain.Entities.Order> query)
+    {
+        return query
+            .Include(order => order.Items)
+            .ThenInclude(item => item.FlashSaleItem)
+            .ThenInclude(item => item.Product)
+            .Include(order => order.Items)
+            .ThenInclude(item => item.FlashSaleItem)
+            .ThenInclude(item => item.Campaign);
     }
 }
 
@@ -177,6 +233,17 @@ public static class OrderRequestValidator
         }
 
         return null; // No validation errors
+    }
+}
+
+public static class OrderRequestHasher
+{
+    private static readonly JsonSerializerOptions JsonOptions = new (JsonSerializerDefaults.Web);
+    public static string Hash(CreateOrderRequest request)
+    {
+        var json = JsonSerializer.Serialize(request, JsonOptions);
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(json));
+        return Convert.ToHexString(bytes);
     }
 }
 

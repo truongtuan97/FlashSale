@@ -20,7 +20,7 @@ public sealed class OrderPostgresConcurrencyTests
             soldQuantity: 0,
             salePrice: 80m);
 
-        var request1 = client1.PostAsJsonAsync("/api/orders", new
+        var request1 = PostOrderAsync(client1, new
         {
             customerName = "Customer One",
             customerEmail = "one@example.com",
@@ -34,7 +34,7 @@ public sealed class OrderPostgresConcurrencyTests
             }
         });
 
-        var request2 = client2.PostAsJsonAsync("/api/orders", new
+        var request2 = PostOrderAsync(client2, new
         {
             customerName = "Customer Two",
             customerEmail = "two@example.com",
@@ -78,7 +78,7 @@ public sealed class OrderPostgresConcurrencyTests
             salePrice: 80m
         );
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Duplicate Line Customer",
             customerEmail = "duplicate@example.com",
@@ -128,7 +128,7 @@ public sealed class OrderPostgresConcurrencyTests
             salePrice: 50m
         );
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Rollback Customer",
             customerEmail = "rollback@example.com",
@@ -178,7 +178,7 @@ public sealed class OrderPostgresConcurrencyTests
             salePrice: 50m
         );
 
-        var response = await client.PostAsJsonAsync("/api/orders", new
+        var response = await PostOrderAsync(client, new
         {
             customerName = "Multi Item Customer",
             customerEmail = "multi@example.com",
@@ -232,6 +232,21 @@ public sealed class OrderPostgresConcurrencyTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         return await ReadJsonAsync(response);
     }
+
+    private static async Task<HttpResponseMessage> PostOrderAsync(
+        HttpClient client,
+        object request,
+        string? idempotencyKey = null)
+    {
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/orders");
+        httpRequest.Headers.Add(
+            "Idempotency-Key",
+            idempotencyKey ?? Guid.NewGuid().ToString("N"));
+        httpRequest.Content = JsonContent.Create(request);
+
+        return await client.SendAsync(httpRequest);
+    }
+
     private static async Task<Guid> CreateFlashSaleItemAsync(
         HttpClient client,
         int totalQuantity,
